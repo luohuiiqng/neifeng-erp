@@ -1,0 +1,15 @@
+node_modules
+dist
+*.rar
+*.zip
+.DS_Store
+*.log
+.env
+.env.*
+
+# IDE / 本地
+.idea
+.vscode
+*.swp
+Thumbs.db
+.cursor

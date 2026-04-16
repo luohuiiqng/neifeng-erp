@@ -1,0 +1,44 @@
+:root {
+  --nf-bg: #f0f2f5;
+  --nf-sidebar: #ffffff;
+  --nf-primary: #1e40af;
+  --nf-primary-light: #3b5ccc;
+  --nf-text: #1f2937;
+  --nf-muted: #6b7280;
+  --nf-radius: 10px;
+  --nf-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  --nf-shadow-md: 0 4px 24px rgba(15, 23, 42, 0.08);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  color: var(--nf-text);
+  background: var(--nf-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 表格与卡片统一圆角 */
+.el-card {
+  border-radius: var(--nf-radius) !important;
+  box-shadow: var(--nf-shadow) !important;
+  border: 1px solid #e8eaef !important;
+}
+
+.el-table {
+  --el-table-border-color: #eef0f4;
+}
+
+/* 主按钮品牌色 */
+.el-button--primary {
+  --el-button-bg-color: var(--nf-primary);
+  --el-button-border-color: var(--nf-primary);
+  --el-button-hover-bg-color: var(--nf-primary-light);
+  --el-button-hover-border-color: var(--nf-primary-light);
+}
