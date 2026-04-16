@@ -9,11 +9,11 @@
           <p class="nf-order-head__sub">{{ order.customer }} · 创建人 {{ order.owner }}</p>
         </div>
         <div class="nf-order-head__tags">
-          <el-tag :type="statusTag(order.status)" size="large">{{ order.status }}</el-tag>
+          <el-tag :type="workflowStore.tagTypeFor(order.status)" size="large">{{ orderStatusLabel }}</el-tag>
           <el-tag v-if="order.customerType === '出口'" type="warning" size="large">出口</el-tag>
-          <el-tag v-if="order.status === '待出货审批'" type="warning" size="large">待厂长出货审批</el-tag>
+          <el-tag v-if="statusDef?.showShipPendingExtra" type="warning" size="large">待厂长出货审批</el-tag>
           <el-tag
-            v-else-if="order.status === '待出货'"
+            v-else-if="statusDef?.showShipReleaseExtra"
             :type="order.shipReleaseApproved ? 'success' : 'info'"
             size="large"
           >
@@ -24,6 +24,11 @@
             }}
           </el-tag>
         </div>
+      </div>
+      <div class="nf-status-steps">
+        <el-steps :active="statusStepIndex" align-center>
+          <el-step v-for="s in statusSteps" :key="s.code" :title="s.name || s.code" />
+        </el-steps>
       </div>
     </el-card>
 
@@ -56,13 +61,18 @@
             <div
               v-for="e in sortedRemarkEntries"
               :key="e.id"
-              :class="['nf-remark-item', e.priority === 'high' ? 'nf-remark-item--high' : '']"
+              :class="['nf-remark-item', e.priority === 'high' ? 'nf-remark-item--high' : '', e.done ? 'nf-remark-item--done' : '']"
             >
               <div class="nf-remark-meta">
                 <span>{{ e.createdAt }} · {{ e.createdBy }}</span>
                 <el-tag v-if="e.priority === 'high'" type="danger" size="small" effect="dark" class="nf-remark-prio">
                   高优先级
                 </el-tag>
+                <el-tag v-if="e.done" type="success" size="small" effect="plain">已完成</el-tag>
+                <el-tag v-else type="info" size="small" effect="plain">进行中</el-tag>
+                <el-button link type="primary" @click="toggleMainRemarkDone(e)">
+                  {{ e.done ? '设为未完成' : '标记完成' }}
+                </el-button>
               </div>
               <div class="nf-remark-text">{{ e.text }}</div>
             </div>
@@ -98,39 +108,28 @@
         </el-dialog>
 
         <div class="nf-actions">
-          <el-button type="primary" @click="onSaveMain">保存主信息</el-button>
-          <el-button
-            v-if="order.status === '草稿' && rolesStore.can('action_mo_issue')"
-            type="success"
-            @click="issueOrder"
-          >
-            厂长下发 → 已下发
-          </el-button>
-          <el-button v-if="order.status === '已下发' && rolesStore.can('action_mo_workshop_judge')" @click="toDesign">
-            需设计 → 设计中
-          </el-button>
-          <el-button v-if="order.status === '已下发' && rolesStore.can('action_mo_workshop_judge')" @click="toStockReady">
-            无需设计 → 备货中
-          </el-button>
-          <el-button v-if="order.status === '设计中' && rolesStore.can('action_design_complete')" type="primary" @click="designDoneToStock">
-            设计完成 → 备货中
-          </el-button>
-          <el-button v-if="order.status === '备货中' && rolesStore.can('action_mo_workshop_judge')" type="primary" @click="startProduction">
-            开始生产 → 生产中
-          </el-button>
-          <el-button v-if="order.status === '生产中' && rolesStore.can('action_mo_request_ship')" type="warning" @click="requestShipApproval">
-            申请出货审批 → 待厂长审批
-          </el-button>
-          <el-button
-            v-if="order.status === '待出货审批' && rolesStore.can('action_ship_release')"
-            type="success"
-            @click="approveShipRelease"
-          >
-            同意出货 → 待出货
-          </el-button>
-          <el-button v-if="order.status === '待出货审批' && rolesStore.can('action_ship_reject')" @click="rejectShipRelease">
-            退回生产 → 生产中
-          </el-button>
+          <template v-if="visibleTransitions.length === 1">
+            <el-button :type="transitionBtnType(visibleTransitions[0])" @click="runTransition(visibleTransitions[0])">
+              {{ transitionDisplayLabel(visibleTransitions[0]) }}
+            </el-button>
+          </template>
+          <template v-else-if="visibleTransitions.length > 1">
+            <el-select
+              v-model="selectedTransitionId"
+              class="nf-transition-select"
+              placeholder="选择下一步操作"
+              filterable
+            >
+              <el-option
+                v-for="t in visibleTransitions"
+                :key="t.id"
+                :label="transitionOptionLabel(t)"
+                :value="t.id"
+              />
+            </el-select>
+            <el-button :disabled="!selectedTransition" type="primary" @click="runSelectedTransition">确认执行</el-button>
+          </template>
+          <span v-else class="nf-muted">当前状态下暂无可执行流转</span>
           <el-button v-if="rolesStore.can('purchase')" @click="$router.push('/purchase/requests')">去采购申请</el-button>
         </div>
         <p class="nf-flow-hint">
@@ -155,13 +154,18 @@
                   <div
                     v-for="e in sortedLineRemarks(row)"
                     :key="e.id"
-                    :class="['nf-remark-item', e.priority === 'high' ? 'nf-remark-item--high' : '']"
+                    :class="['nf-remark-item', e.priority === 'high' ? 'nf-remark-item--high' : '', e.done ? 'nf-remark-item--done' : '']"
                   >
                     <div class="nf-remark-meta">
                       <span>{{ e.createdAt }} · {{ e.createdBy }}</span>
                       <el-tag v-if="e.priority === 'high'" type="danger" size="small" effect="dark" class="nf-remark-prio">
                         高优先级
                       </el-tag>
+                      <el-tag v-if="e.done" type="success" size="small" effect="plain">已完成</el-tag>
+                      <el-tag v-else type="info" size="small" effect="plain">进行中</el-tag>
+                      <el-button link type="primary" @click="toggleLineRemarkDone(row, e)">
+                        {{ e.done ? '设为未完成' : '标记完成' }}
+                      </el-button>
                     </div>
                     <div class="nf-remark-text">{{ e.text }}</div>
                   </div>
@@ -273,6 +277,7 @@ import { ElMessage } from 'element-plus'
 import { useProductionOrderStore } from '@/stores/productionOrders'
 import { usePurchaseOrderStore } from '@/stores/purchaseOrders'
 import { useRolesStore } from '@/stores/roles'
+import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 
 const route = useRoute()
 const tab = ref('main')
@@ -290,15 +295,37 @@ watch(
 const poStore = useProductionOrderStore()
 const purchaseStore = usePurchaseOrderStore()
 const rolesStore = useRolesStore()
+const workflowStore = useOrderWorkflowStore()
 const { orders } = storeToRefs(poStore)
+
+const order = computed(() => orders.value.find((o) => o.id === route.params.id))
+
+const statusDef = computed(() => (order.value ? workflowStore.statusByCode(order.value.status) : null))
+const orderStatusLabel = computed(() => {
+  if (!order.value) return ''
+  return statusDef.value?.name || order.value.status
+})
+const statusSteps = computed(() => workflowStore.statuses.map((s) => ({ code: s.code, name: s.name || s.code })))
+const statusStepIndex = computed(() => {
+  if (!order.value) return 0
+  const i = statusSteps.value.findIndex((s) => s.code === order.value.status)
+  return i >= 0 ? i : 0
+})
+
+const visibleTransitions = computed(() => {
+  if (!order.value) return []
+  return workflowStore.transitionsFrom(order.value.status).filter((t) => rolesStore.can(t.permissionKey))
+})
+const selectedTransitionId = ref('')
+const selectedTransition = computed(() =>
+  visibleTransitions.value.find((t) => t.id === selectedTransitionId.value) || null,
+)
 
 const purchaseTotalForOrder = computed(() => {
   const o = order.value
   if (!o || !rolesStore.canViewOrderFinancials()) return 0
   return purchaseStore.sumAmountForProductionOrder(o.id)
 })
-
-const order = computed(() => orders.value.find((o) => o.id === route.params.id))
 
 watch(
   () => order.value?.id,
@@ -307,11 +334,24 @@ watch(
   },
   { immediate: true },
 )
+watch(
+  visibleTransitions,
+  (list) => {
+    if (!list.length) {
+      selectedTransitionId.value = ''
+      return
+    }
+    if (!list.some((t) => t.id === selectedTransitionId.value)) {
+      selectedTransitionId.value = list.length === 1 ? list[0].id : ''
+    }
+  },
+  { immediate: true },
+)
 
 const canViewOrder = computed(() => {
   const o = order.value
   if (!o) return false
-  if (o.status !== '草稿') return true
+  if (!workflowStore.isDraftStatus(o.status)) return true
   return rolesStore.canViewDraftProductionOrder()
 })
 
@@ -422,22 +462,76 @@ function submitAppendRemark() {
   ElMessage.success('已追加备注')
 }
 
-function statusTag(s) {
-  const m = {
-    草稿: 'info',
-    已下发: 'info',
-    设计中: 'warning',
-    备货中: 'warning',
-    生产中: 'primary',
-    待出货审批: 'warning',
-    待出货: 'success',
-    已结案: 'success',
+function toggleMainRemarkDone(entry) {
+  if (!order.value || !entry?.id) return
+  const next = !entry.done
+  const ok = poStore.toggleRemarkDone(order.value.id, entry.id, next)
+  if (!ok) {
+    ElMessage.warning('更新备注状态失败，请刷新后重试')
+    return
   }
-  return m[s] || 'info'
+  ElMessage.success(next ? '已标记为完成' : '已恢复为未完成')
 }
 
-function onSaveMain() {
-  ElMessage.info('主信息字段的持久化编辑可在后续版本对接保存接口后启用')
+function toggleLineRemarkDone(row, entry) {
+  if (!order.value || !row?.lineId || !entry?.id) return
+  const next = !entry.done
+  const ok = poStore.toggleLineRemarkDone(order.value.id, row.lineId, entry.id, next)
+  if (!ok) {
+    ElMessage.warning('更新明细备注状态失败，请刷新后重试')
+    return
+  }
+  ElMessage.success(next ? '已标记为完成' : '已恢复为未完成')
+}
+
+function transitionBtnType(t) {
+  if (t.effect === 'ship_request') return 'warning'
+  if (t.effect === 'ship_approve') return 'success'
+  return 'primary'
+}
+
+function transitionDisplayLabel(t) {
+  const raw = String(t?.label || '').trim()
+  if (!raw) return `转为${t?.toCode || '目标状态'}`
+  if (raw.startsWith('设为')) return `转为${raw.slice(2)}`
+  if (raw.includes('→')) {
+    const parts = raw.split('→')
+    const action = parts[0]?.trim()
+    if (action) return action
+    const result = parts[parts.length - 1]?.trim()
+    if (result) return `转为${result}`
+  }
+  return raw
+}
+
+function transitionOptionLabel(t) {
+  const action = transitionDisplayLabel(t)
+  const to = workflowStore.statusByCode(t.toCode)?.name || t.toCode
+  return `${action}（结果：${to}）`
+}
+
+function runSelectedTransition() {
+  if (!selectedTransition.value) {
+    ElMessage.warning('请先选择下一步操作')
+    return
+  }
+  runTransition(selectedTransition.value)
+}
+
+function runTransition(t) {
+  if (!order.value) return
+  if (!rolesStore.can(t.permissionKey)) {
+    ElMessage.warning('当前角色无权执行此操作')
+    return
+  }
+  const actor = rolesStore.currentRole?.name || ''
+  const r = workflowStore.applyTransition(order.value.id, t.id, actor)
+  if (!r.ok) {
+    ElMessage.warning(r.message || '操作失败')
+    return
+  }
+  const to = workflowStore.statusByCode(t.toCode)?.name || t.toCode
+  ElMessage.success(`状态已更新为「${to}」`)
 }
 
 function onTogglePartialShip(next) {
@@ -448,89 +542,6 @@ function onTogglePartialShip(next) {
   }
   poStore.setAllowPartialShip(order.value.id, !!next)
   ElMessage.success(`已设置为${next ? '允许' : '不允许'}分批出货`)
-}
-
-function issueOrder() {
-  if (!rolesStore.can('action_mo_issue')) {
-    ElMessage.warning('当前角色无「订单下发」权限')
-    return
-  }
-  if (!order.value) return
-  poStore.setOrderStatus(order.value.id, '已下发')
-  ElMessage.success('订单已下发，状态：已下发（待车间主任判读）')
-}
-
-function toDesign() {
-  if (!rolesStore.can('action_mo_workshop_judge')) {
-    ElMessage.warning('需车间主任权限：判读是否需要设计')
-    return
-  }
-  if (!order.value) return
-  poStore.setOrderStatus(order.value.id, '设计中')
-  ElMessage.success('已转为设计中')
-}
-
-function toStockReady() {
-  if (!rolesStore.can('action_mo_workshop_judge')) {
-    ElMessage.warning('需车间主任权限')
-    return
-  }
-  if (!order.value) return
-  poStore.setOrderStatus(order.value.id, '备货中')
-  ElMessage.success('已转为备货中（可按需发起采购）')
-}
-
-function designDoneToStock() {
-  if (!rolesStore.can('action_design_complete')) {
-    ElMessage.warning('需设计部权限：标记设计完成')
-    return
-  }
-  if (!order.value) return
-  poStore.setOrderStatus(order.value.id, '备货中')
-  ElMessage.success('设计完成，已转为备货中')
-}
-
-function startProduction() {
-  if (!rolesStore.can('action_mo_workshop_judge')) {
-    ElMessage.warning('需车间主任权限：推进到生产中')
-    return
-  }
-  if (!order.value) return
-  poStore.setOrderStatus(order.value.id, '生产中')
-  ElMessage.success('已进入生产中（可与备货/采购并行）')
-}
-
-function requestShipApproval() {
-  if (!rolesStore.can('action_mo_request_ship')) {
-    ElMessage.warning('需车间主任权限：申请出货审批')
-    return
-  }
-  if (!order.value) return
-  poStore.setOrderStatus(order.value.id, '待出货审批')
-  poStore.setShipRelease(order.value.id, false, '')
-  ElMessage.success('已提交出货审批，待厂长处理')
-}
-
-function approveShipRelease() {
-  if (!rolesStore.can('action_ship_release')) {
-    ElMessage.warning('需厂长权限：同意出货')
-    return
-  }
-  if (!order.value) return
-  poStore.setOrderStatus(order.value.id, '待出货')
-  poStore.setShipRelease(order.value.id, true, rolesStore.currentRole?.name || '厂长')
-  ElMessage.success('已同意出货，车间可到出货页提交发运')
-}
-
-function rejectShipRelease() {
-  if (!rolesStore.can('action_ship_reject')) {
-    ElMessage.warning('需厂长权限：退回生产')
-    return
-  }
-  if (!order.value) return
-  poStore.setOrderStatus(order.value.id, '生产中')
-  poStore.setShipRelease(order.value.id, false, '')
-  ElMessage.success('已退回生产，可完善后再申请出货')
 }
 
 </script>
@@ -567,6 +578,11 @@ function rejectShipRelease() {
   display: flex;
   gap: 8px;
 }
+.nf-status-steps {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
 .nf-tabs {
   border-radius: var(--nf-radius);
   overflow: hidden;
@@ -576,6 +592,10 @@ function rejectShipRelease() {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
+}
+.nf-transition-select {
+  width: min(420px, 100%);
 }
 .nf-muted {
   color: #6b7280;
@@ -626,11 +646,20 @@ function rejectShipRelease() {
 .nf-remark-item:last-child {
   border-bottom: none;
 }
+.nf-remark-item--done {
+  background: #f9fafb;
+  border-left: 4px solid #10b981;
+  padding-left: 10px;
+}
 .nf-remark-item--high {
   color: #b91c1c;
   background: #fef2f2;
   border-left: 4px solid #dc2626;
   padding-left: 10px;
+}
+.nf-remark-item--done .nf-remark-text {
+  color: #6b7280;
+  text-decoration: line-through;
 }
 .nf-remark-item--high .nf-remark-meta {
   color: #991b1b;

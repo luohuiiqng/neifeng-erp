@@ -4,7 +4,7 @@
 
     <el-card shadow="never" class="nf-card">
       <p class="nf-lead">
-        由<strong>厂长</strong>新建（保存后为<strong>草稿</strong>，仅厂长与管理员可见）。明细列为：<strong>单位名称、机型、冷/热、缝包、台数、打孔、备注</strong>，至少一行且须填机型与台数。厂长在详情<strong>下发</strong>后，由车间主任判读是否需设计并推进备货与生产。
+        由<strong>厂长</strong>新建（保存后为<strong>{{ newDraftLabel }}</strong>，仅厂长与管理员可见）。明细列为：<strong>单位名称、机型、冷/热、缝包、台数、打孔、备注</strong>，至少一行且须填机型与台数。厂长在详情<strong>下发</strong>后，由车间主任判读是否需设计并推进备货与生产。
       </p>
 
       <el-form ref="formRef" :model="form" :rules="rules" label-width="120px" class="nf-form">
@@ -147,18 +147,25 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { useProductionOrderStore } from '@/stores/productionOrders'
 import { useCustomerStore } from '@/stores/customers'
 import { useRolesStore } from '@/stores/roles'
+import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 
 const router = useRouter()
 const poStore = useProductionOrderStore()
 const customerStore = useCustomerStore()
 const rolesStore = useRolesStore()
+const wfStore = useOrderWorkflowStore()
+
+const newDraftLabel = computed(() => {
+  const code = wfStore.draftStatusCode
+  return wfStore.statusByCode(code)?.name || code
+})
 
 function queryCustomerNames(queryStr, cb) {
   const names = customerStore.nameOptions()
@@ -244,9 +251,10 @@ async function onSubmit() {
   try {
     const id = poStore.addOrder({
       ...form,
+      initialStatus: wfStore.draftStatusCode,
       lines: form.lines.map((l) => ({ ...l })),
     })
-    ElMessage.success(`已生成生产订单 ${id}（草稿）`)
+    ElMessage.success(`已生成生产订单 ${id}（${newDraftLabel.value}）`)
     router.replace(`/production-orders/${id}`)
   } finally {
     submitting.value = false

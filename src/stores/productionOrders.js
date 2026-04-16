@@ -47,7 +47,12 @@ function migrateLineRemarks(o) {
   for (const line of o.lines) {
     if (line == null || typeof line !== 'object') continue
     if (!line.lineId) line.lineId = newLineId()
-    if (Array.isArray(line.noteRemarkEntries)) continue
+    if (Array.isArray(line.noteRemarkEntries)) {
+      for (const e of line.noteRemarkEntries) {
+        if (typeof e.done !== 'boolean') e.done = false
+      }
+      continue
+    }
     const legacy = typeof line.note === 'string' ? line.note.trim() : ''
     line.noteRemarkEntries = legacy
       ? [
@@ -57,6 +62,7 @@ function migrateLineRemarks(o) {
             priority: 'normal',
             createdAt,
             createdBy: owner,
+            done: false,
           },
         ]
       : []
@@ -75,10 +81,28 @@ function migrateRemarkEntries(o) {
           priority: 'normal',
           createdAt: o.signedAt || todayStr(),
           createdBy: (o.owner || '—').trim() || '—',
+          done: false,
         },
       ]
     : []
   delete o.remark
+}
+
+function migrateRemarkDone(o) {
+  if (!o || typeof o !== 'object') return
+  if (Array.isArray(o.remarkEntries)) {
+    for (const e of o.remarkEntries) {
+      if (typeof e.done !== 'boolean') e.done = false
+    }
+  }
+  if (Array.isArray(o.lines)) {
+    for (const line of o.lines) {
+      if (!Array.isArray(line?.noteRemarkEntries)) continue
+      for (const e of line.noteRemarkEntries) {
+        if (typeof e.done !== 'boolean') e.done = false
+      }
+    }
+  }
 }
 
 function migrateShippingApproval(o) {
@@ -122,6 +146,7 @@ function loadInitial() {
           migrateRemarkEntries(o)
           migrateOrderLines(o)
           migrateLineRemarks(o)
+          migrateRemarkDone(o)
           migrateShippingApproval(o)
           migrateShipPendingApproval(o)
         })
@@ -137,6 +162,7 @@ function loadInitial() {
     migrateRemarkEntries(o)
     migrateOrderLines(o)
     migrateLineRemarks(o)
+    migrateRemarkDone(o)
     migrateShippingApproval(o)
     migrateShipPendingApproval(o)
   })
@@ -209,7 +235,19 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
       priority: pr,
       createdAt: todayStr(),
       createdBy: String(by || '—').trim() || '—',
+      done: false,
     })
+  }
+
+  function toggleRemarkDone(orderId, remarkId, done) {
+    const o = orders.value.find((x) => x.id === orderId)
+    if (!o) return false
+    migrateRemarkEntries(o)
+    migrateRemarkDone(o)
+    const e = o.remarkEntries.find((x) => x.id === remarkId)
+    if (!e) return false
+    e.done = !!done
+    return true
   }
 
   /** 订单明细行追加备注（按 lineId 定位行） */
@@ -236,8 +274,22 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
       priority: pr,
       createdAt: todayStr(),
       createdBy: String(by || '—').trim() || '—',
+      done: false,
     })
     line.note = line.noteRemarkEntries.map((e) => e.text).join('；')
+    return true
+  }
+
+  function toggleLineRemarkDone(orderId, lineId, remarkId, done) {
+    const o = orders.value.find((x) => x.id === orderId)
+    if (!o) return false
+    migrateLineRemarks(o)
+    migrateRemarkDone(o)
+    const line = o.lines.find((l) => l.lineId === lineId)
+    if (!line || !Array.isArray(line.noteRemarkEntries)) return false
+    const e = line.noteRemarkEntries.find((x) => x.id === remarkId)
+    if (!e) return false
+    e.done = !!done
     return true
   }
 
@@ -276,6 +328,7 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
               priority: 'normal',
               createdAt: signedAt,
               createdBy: ownerTrim,
+              done: false,
             },
           ]
         : []
@@ -299,7 +352,7 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
       signedAt: payload.signedAt,
       dueDate: payload.dueDate,
       owner: (payload.owner || '徐总').trim(),
-      status: '草稿',
+      status: String(payload.initialStatus ?? '草稿').trim() || '草稿',
       totalQty,
       remarkEntries: buildInitialRemarkEntries(payload),
       lines,
@@ -319,7 +372,9 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
     addOrder,
     setOrderStatus,
     appendRemark,
+    toggleRemarkDone,
     appendLineRemark,
+    toggleLineRemarkDone,
     touchLineStructure,
     setShipRelease,
     recordShipment,

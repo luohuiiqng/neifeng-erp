@@ -56,15 +56,17 @@ import { ElMessage } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { useProductionOrderStore } from '@/stores/productionOrders'
 import { useRolesStore } from '@/stores/roles'
+import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 
 const router = useRouter()
 const kw = ref('')
 const rolesStore = useRolesStore()
+const wfStore = useOrderWorkflowStore()
 const { orders } = storeToRefs(useProductionOrderStore())
 
 const rows = computed(() =>
   orders.value
-    .filter((o) => o.status !== '草稿')
+    .filter((o) => !wfStore.isDraftStatus(o.status))
     .map((o) => {
       const open = o.contractAmount - o.receivedAmount
       return {

@@ -187,10 +187,12 @@ import { purchaseRequests } from '@/mock/data'
 import { useApprovalsStore } from '@/stores/approvals'
 import { useProductionOrderStore } from '@/stores/productionOrders'
 import { useRolesStore } from '@/stores/roles'
+import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 
 const poStore = useProductionOrderStore()
 const approvalsStore = useApprovalsStore()
 const rolesStore = useRolesStore()
+const wfStore = useOrderWorkflowStore()
 const { orders } = storeToRefs(poStore)
 
 const roleCode = computed(() => rolesStore.currentRole?.code || '')
@@ -209,9 +211,8 @@ const roleFocusLine = computed(() => ROLE_FOCUS[roleCode.value] || '请从侧栏
 const pendingApprovals = computed(() => approvalsStore.items.filter((a) => a.status === '待审批'))
 
 const stats = computed(() => {
-  const running = orders.value.filter((o) =>
-    ['已下发', '设计中', '备货中', '生产中', '待出货审批', '待出货'].includes(o.status),
-  ).length
+  const runningSet = new Set(wfStore.runningStatusCodes)
+  const running = orders.value.filter((o) => runningSet.has(o.status)).length
   const unpaid = rolesStore.canViewOrderFinancials()
     ? orders.value.reduce((s, o) => s + (o.contractAmount - o.receivedAmount), 0)
     : 0
@@ -226,13 +227,15 @@ const stats = computed(() => {
   return { running, unpaid, actionableApproval, pendingApprovalTotal: pendingApprovals.value.length }
 })
 
-const stockOrdersPreview = computed(() =>
-  orders.value.filter((o) => ['已下发', '设计中', '备货中'].includes(o.status)).slice(0, 8),
-)
+const stockOrdersPreview = computed(() => {
+  const set = new Set(wfStore.stockPanelCodes)
+  return orders.value.filter((o) => set.has(o.status)).slice(0, 8)
+})
 
-const producingOrdersPreview = computed(() =>
-  orders.value.filter((o) => ['生产中', '待出货审批', '待出货'].includes(o.status)).slice(0, 8),
-)
+const producingOrdersPreview = computed(() => {
+  const set = new Set(wfStore.producePanelCodes)
+  return orders.value.filter((o) => set.has(o.status)).slice(0, 8)
+})
 
 const primaryPanel = computed(() => {
   const code = roleCode.value
@@ -249,13 +252,12 @@ const statCards = computed(() => {
       key: 'mo',
       label: '在制生产订单',
       displayValue: stats.value.running,
-      hint: '已下发/设计中/备货中/生产中/待出货审批/待出货',
+      hint: `在制状态：${wfStore.runningStatusCodes.join('、') || '—'}`,
     })
   }
   if (roleCode.value === 'workshop') {
-    const n = orders.value.filter((o) =>
-      ['已下发', '设计中', '备货中', '生产中', '待出货审批', '待出货'].includes(o.status),
-    ).length
+    const runSet = new Set(wfStore.runningStatusCodes)
+    const n = orders.value.filter((o) => runSet.has(o.status)).length
     cards.push({
       key: 'run',
       label: '已下发·在制',
@@ -264,7 +266,7 @@ const statCards = computed(() => {
     })
   }
   if (roleCode.value === 'director' || roleCode.value === 'admin') {
-    const n = orders.value.filter((o) => o.status === '草稿').length
+    const n = orders.value.filter((o) => wfStore.isDraftStatus(o.status)).length
     cards.push({
       key: 'draft',
       label: '未下发（草稿）',
@@ -329,9 +331,9 @@ const topOrdersTitle = computed(() => {
 const showOpenAmountColumn = computed(() => rolesStore.can('finance') && rolesStore.canViewOrderFinancials())
 
 const topOrdersDisplay = computed(() => {
-  let list = orders.value.filter((o) => o.status !== '已结案')
+  let list = orders.value.filter((o) => !wfStore.isClosedStatus(o.status))
   if (!rolesStore.canViewDraftProductionOrder()) {
-    list = list.filter((o) => o.status !== '草稿')
+    list = list.filter((o) => !wfStore.isDraftStatus(o.status))
   }
   if (roleCode.value === 'finance') {
     list = [...list].sort((a, b) => {
@@ -367,17 +369,7 @@ function formatMoney(n) {
 }
 
 function statusType(s) {
-  const map = {
-    草稿: 'info',
-    已下发: 'info',
-    设计中: 'warning',
-    备货中: 'warning',
-    生产中: 'primary',
-    待出货审批: 'warning',
-    待出货: 'success',
-    已结案: 'success',
-  }
-  return map[s] || 'info'
+  return wfStore.tagTypeFor(s)
 }
 </script>
 

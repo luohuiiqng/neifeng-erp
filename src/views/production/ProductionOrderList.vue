@@ -10,14 +10,13 @@
           </el-input>
           <el-select v-model="statusFilter" clearable placeholder="状态" style="width: 140px">
             <el-option label="全部" value="" />
-            <el-option v-if="rolesStore.canViewDraftProductionOrder()" label="草稿（未下发）" value="草稿" />
-            <el-option label="已下发" value="已下发" />
-            <el-option label="设计中" value="设计中" />
-            <el-option label="备货中" value="备货中" />
-            <el-option label="生产中" value="生产中" />
-            <el-option label="待出货审批" value="待出货审批" />
-            <el-option label="待出货" value="待出货" />
-            <el-option label="已结案" value="已结案" />
+            <el-option
+              v-for="s in wfStore.statuses"
+              v-show="!s.isDraft || rolesStore.canViewDraftProductionOrder()"
+              :key="s.code"
+              :label="s.isDraft ? `${s.name}（未下发）` : s.name"
+              :value="s.code"
+            />
           </el-select>
         </div>
         <el-button
@@ -60,9 +59,11 @@ import { storeToRefs } from 'pinia'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { useProductionOrderStore } from '@/stores/productionOrders'
 import { useRolesStore } from '@/stores/roles'
+import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 
 const poStore = useProductionOrderStore()
 const rolesStore = useRolesStore()
+const wfStore = useOrderWorkflowStore()
 const { orders } = storeToRefs(poStore)
 
 const keyword = ref('')
@@ -70,7 +71,7 @@ const statusFilter = ref('')
 
 const filtered = computed(() =>
   orders.value.filter((o) => {
-    if (o.status === '草稿' && !rolesStore.canViewDraftProductionOrder()) return false
+    if (wfStore.isDraftStatus(o.status) && !rolesStore.canViewDraftProductionOrder()) return false
     const k = keyword.value.trim()
     const matchK =
       !k || o.customer.includes(k) || o.id.toLowerCase().includes(k.toLowerCase())
@@ -80,17 +81,7 @@ const filtered = computed(() =>
 )
 
 function tagType(s) {
-  const m = {
-    草稿: 'info',
-    已下发: 'info',
-    设计中: 'warning',
-    备货中: 'warning',
-    生产中: 'primary',
-    待出货审批: 'warning',
-    待出货: 'success',
-    已结案: 'success',
-  }
-  return m[s] || 'info'
+  return wfStore.tagTypeFor(s)
 }
 </script>
 

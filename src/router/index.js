@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useRolesStore } from '@/stores/roles'
 import { useProductionOrderStore } from '@/stores/productionOrders'
+import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 import { useUserStore } from '@/stores/users'
 
 import MainLayout from '@/layouts/MainLayout.vue'
@@ -102,6 +103,12 @@ const routes = [
         component: () => import('@/views/system/RoleManagement.vue'),
       },
       {
+        path: 'system/order-workflow',
+        name: 'OrderWorkflowSettings',
+        meta: { title: '订单状态流转', perm: 'order_workflow' },
+        component: () => import('@/views/system/OrderWorkflowSettings.vue'),
+      },
+      {
         path: 'sales-next',
         name: 'SalesNext',
         meta: { title: '销售管理', perm: 'dashboard', placeholder: true, page: 'sales' },
@@ -145,9 +152,10 @@ router.beforeEach((to) => {
   }
   if (to.name === 'ProductionOrderDetail') {
     const po = useProductionOrderStore()
+    const wf = useOrderWorkflowStore()
     const id = to.params.id
     const o = po.orders.find((x) => x.id === id)
-    if (o?.status === '草稿' && !store.canViewDraftProductionOrder()) {
+    if (o && wf.isDraftStatus(o.status) && !store.canViewDraftProductionOrder()) {
       return { path: '/production-orders' }
     }
   }

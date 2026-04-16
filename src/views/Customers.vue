@@ -58,10 +58,12 @@ import { ElMessage } from 'element-plus'
 import { useProductionOrderStore } from '@/stores/productionOrders'
 import { useCustomerStore } from '@/stores/customers'
 import { useRolesStore } from '@/stores/roles'
+import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 
 const router = useRouter()
 const rolesStore = useRolesStore()
 const poStore = useProductionOrderStore()
+const wfStore = useOrderWorkflowStore()
 const customerStore = useCustomerStore()
 const { orders } = storeToRefs(poStore)
 const { list: masterList } = storeToRefs(customerStore)
@@ -82,7 +84,7 @@ const rules = {
 function aggregateFromOrders() {
   const map = new Map()
   for (const o of orders.value) {
-    if (o.status === '草稿') continue
+    if (wfStore.isDraftStatus(o.status)) continue
     const k = (o.customer || '').trim() || '—'
     const cur = map.get(k) || {
       customer: k,
@@ -163,7 +165,7 @@ async function submitCustomer() {
 }
 
 function goFirstOrder(customer) {
-  const o = orders.value.find((x) => x.customer === customer && x.status !== '草稿')
+  const o = orders.value.find((x) => x.customer === customer && !wfStore.isDraftStatus(x.status))
   if (o) router.push(`/production-orders/${o.id}`)
   else ElMessage.info('该客户暂无已下发的生产订单')
 }

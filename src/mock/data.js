@@ -188,6 +188,7 @@ export const MENU_DEFS = [
   { key: 'approval', title: '审批中心', path: '/approval', icon: 'Stamp' },
   { key: 'users', title: '用户账号', path: '/system/users', icon: 'Avatar' },
   { key: 'roles', title: '角色管理', path: '/system/roles', icon: 'UserFilled' },
+  { key: 'order_workflow', title: '订单状态流转', path: '/system/order-workflow', icon: 'Operation' },
   { key: 'sales_next', title: '销售', path: '/sales-next', icon: 'Sell', placeholder: true },
   { key: 'production', title: '车间执行', path: '/production', icon: 'SetUp', placeholder: true },
   { key: 'warehouse', title: '仓库', path: '/warehouse', icon: 'Box', placeholder: true },

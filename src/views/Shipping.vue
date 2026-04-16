@@ -4,7 +4,10 @@
       <template #header>
         <div class="nf-ship-head">
           <span class="nf-head">出货确认</span>
-          <span class="nf-ship-hint"><strong>出货提交</strong>由具备「操作·出货确认提交」的<strong>车间主任</strong>（或管理员）操作；须生产订单为<strong>待出货</strong>且<strong>厂长已同意出货</strong>后方可提交。其他角色可查看但无提交按钮。</span>
+          <span class="nf-ship-hint">
+            <strong>出货提交</strong>由具备「操作·出货确认提交」的<strong>车间主任</strong>（或管理员）操作；须生产订单处于
+            {{ wfStore.shipReadyStatusesLabel }} 且<strong>厂长已同意出货</strong>后方可提交。其他角色可查看但无提交按钮。
+          </span>
         </div>
       </template>
       <el-form :model="form" label-width="120px" class="nf-form">
@@ -45,10 +48,12 @@ import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
 import { useProductionOrderStore } from '@/stores/productionOrders'
 import { useRolesStore } from '@/stores/roles'
+import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 
 const route = useRoute()
 const rolesStore = useRolesStore()
 const poStore = useProductionOrderStore()
+const wfStore = useOrderWorkflowStore()
 const { orders } = storeToRefs(poStore)
 
 const form = reactive({
@@ -77,8 +82,8 @@ function onSubmit() {
     ElMessage.warning('请选择关联生产订单')
     return
   }
-  if (selectedOrder.value.status !== '待出货') {
-    ElMessage.warning('仅待出货状态可提交出货')
+  if (!wfStore.isShippableStatusCode(selectedOrder.value.status)) {
+    ElMessage.warning(`仅处于 ${wfStore.shipReadyStatusesLabel} 的订单可提交出货`)
     return
   }
   if (!selectedOrder.value.shipReleaseApproved) {
