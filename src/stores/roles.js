@@ -5,7 +5,7 @@ import { useUserStore } from '@/stores/users'
 
 const STORAGE_ROLES = 'nf_erp_proto_roles'
 const SCHEMA_KEY = 'nf_erp_proto_roles_schema'
-const SCHEMA_VER = '16'
+const SCHEMA_VER = '17'
 
 const defaultRoles = () => [
   {
@@ -23,10 +23,12 @@ const defaultRoles = () => [
     permissions: [
       'dashboard',
       'customer',
+      'supplier',
       'production_order',
       'shipping',
       'finance',
       'approval',
+      'warehouse',
       'perm_view_draft_order',
       'perm_view_order_financials',
       'action_customer_create',
@@ -48,8 +50,10 @@ const defaultRoles = () => [
       'dashboard',
       'production_order',
       'purchase',
+      'supplier',
       'shipping',
       'approval',
+      'warehouse',
       'action_mo_workshop_judge',
       'action_mo_request_ship',
       'action_ship_submit',
@@ -68,7 +72,7 @@ const defaultRoles = () => [
     code: 'purchase',
     name: '采购',
     description: '请购与执行；提交采购申请及采购单财务审核',
-    permissions: ['dashboard', 'purchase', 'production_order', 'action_pr_submit', 'action_po_submit_finance'],
+    permissions: ['dashboard', 'purchase', 'supplier', 'warehouse', 'production_order', 'action_pr_submit', 'action_po_submit_finance'],
   },
   {
     id: '6',
@@ -93,11 +97,27 @@ function loadRoles() {
   }
   try {
     const raw = localStorage.getItem(STORAGE_ROLES)
-    if (raw) return JSON.parse(raw)
+    if (raw) return migrateLoadedRoles(JSON.parse(raw))
   } catch {
     /* ignore */
   }
   return defaultRoles()
+}
+
+function ensurePerm(role, perm) {
+  if (!role || !Array.isArray(role.permissions)) return
+  if (!role.permissions.includes(perm)) role.permissions.push(perm)
+}
+
+function migrateLoadedRoles(list) {
+  if (!Array.isArray(list)) return defaultRoles()
+  for (const r of list) {
+    if (r?.code === 'admin') continue
+    // 仓库模块默认开放给厂长/车间/采购，便于采购到货与备料协同。
+    if (['director', 'workshop', 'purchase'].includes(r?.code)) ensurePerm(r, 'warehouse')
+    if (['director', 'purchase'].includes(r?.code)) ensurePerm(r, 'supplier')
+  }
+  return list
 }
 
 export const useRolesStore = defineStore('roles', () => {

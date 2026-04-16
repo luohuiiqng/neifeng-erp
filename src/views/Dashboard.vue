@@ -183,17 +183,19 @@
 <script setup>
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { purchaseRequests } from '@/mock/data'
 import { useApprovalsStore } from '@/stores/approvals'
 import { useProductionOrderStore } from '@/stores/productionOrders'
 import { useRolesStore } from '@/stores/roles'
 import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
+import { usePurchaseRequestStore } from '@/stores/purchaseRequests'
 
 const poStore = useProductionOrderStore()
 const approvalsStore = useApprovalsStore()
 const rolesStore = useRolesStore()
 const wfStore = useOrderWorkflowStore()
+const prStore = usePurchaseRequestStore()
 const { orders } = storeToRefs(poStore)
+const { requests: purchaseRequests } = storeToRefs(prStore)
 
 const roleCode = computed(() => rolesStore.currentRole?.code || '')
 
@@ -278,7 +280,7 @@ const statCards = computed(() => {
     cards.push({
       key: 'pr',
       label: '采购申请（条）',
-      displayValue: purchaseRequests.length,
+      displayValue: purchaseRequests.value.length,
       hint: '可进入详情查看',
     })
   }

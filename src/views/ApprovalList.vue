@@ -12,7 +12,7 @@
         <el-table-column prop="time" label="提交时间" width="170" />
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }">
-            <el-tag :type="row.status === '待审批' ? 'warning' : 'success'" size="small">{{ row.status }}</el-tag>
+            <el-tag :type="tagType(row.status)" size="small">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
@@ -25,7 +25,11 @@
             >
               处理
             </el-button>
-            <span v-else-if="row.status === '待审批'" class="nf-muted">无权限</span>
+            <el-tooltip v-else-if="row.status === '待审批'" :content="approvalPermissionTip(row)" placement="top">
+              <span>
+                <el-button type="primary" link disabled>处理</el-button>
+              </span>
+            </el-tooltip>
             <span v-else class="nf-muted">—</span>
           </template>
         </el-table-column>
@@ -37,9 +41,16 @@
 <script setup>
 import { useApprovalsStore } from '@/stores/approvals'
 import { useRolesStore } from '@/stores/roles'
+import { approvalPermissionTip } from '@/utils/approvalPermission'
 
 const approvalsStore = useApprovalsStore()
 const rolesStore = useRolesStore()
+
+function tagType(status) {
+  if (status === '待审批') return 'warning'
+  if (status === '已退回') return 'danger'
+  return 'success'
+}
 </script>
 
 <style scoped>

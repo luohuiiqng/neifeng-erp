@@ -130,7 +130,21 @@
             <el-button :disabled="!selectedTransition" type="primary" @click="runSelectedTransition">确认执行</el-button>
           </template>
           <span v-else class="nf-muted">当前状态下暂无可执行流转</span>
-          <el-button v-if="rolesStore.can('purchase')" @click="$router.push('/purchase/requests')">去采购申请</el-button>
+          <el-tooltip
+            v-for="t in blockedTransitions"
+            :key="`blocked-${t.id}`"
+            :content="permissionTip(t.permissionKey)"
+            placement="top"
+          >
+            <span>
+              <el-button disabled>{{ transitionDisplayLabel(t) }}</el-button>
+            </span>
+          </el-tooltip>
+          <el-tooltip :disabled="rolesStore.can('purchase')" :content="permissionTip('purchase')" placement="top">
+            <span>
+              <el-button :disabled="!rolesStore.can('purchase')" @click="$router.push('/purchase/requests')">去采购申请</el-button>
+            </span>
+          </el-tooltip>
         </div>
         <p class="nf-flow-hint">
           <strong>草稿</strong>仅厂长与管理员可见。<strong>厂长下发</strong>后车间主任判读是否需设计；需设计则由设计部完成后进入备货。备货与采购可并行，进入<strong>生产中</strong>后仍可继续采购补料。生产结束后由车间主任<strong>申请出货</strong>，<strong>厂长同意</strong>后状态为待出货，方可到出货页提交。结案仍走<strong>财务应收 → 审批中心</strong>。
@@ -278,6 +292,7 @@ import { useProductionOrderStore } from '@/stores/productionOrders'
 import { usePurchaseOrderStore } from '@/stores/purchaseOrders'
 import { useRolesStore } from '@/stores/roles'
 import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
+import { permissionTip } from '@/utils/permissionMeta'
 
 const route = useRoute()
 const tab = ref('main')
@@ -312,10 +327,12 @@ const statusStepIndex = computed(() => {
   return i >= 0 ? i : 0
 })
 
-const visibleTransitions = computed(() => {
+const allTransitions = computed(() => {
   if (!order.value) return []
-  return workflowStore.transitionsFrom(order.value.status).filter((t) => rolesStore.can(t.permissionKey))
+  return workflowStore.transitionsFrom(order.value.status)
 })
+const visibleTransitions = computed(() => allTransitions.value.filter((t) => rolesStore.can(t.permissionKey)))
+const blockedTransitions = computed(() => allTransitions.value.filter((t) => !rolesStore.can(t.permissionKey)))
 const selectedTransitionId = ref('')
 const selectedTransition = computed(() =>
   visibleTransitions.value.find((t) => t.id === selectedTransitionId.value) || null,
@@ -521,7 +538,7 @@ function runSelectedTransition() {
 function runTransition(t) {
   if (!order.value) return
   if (!rolesStore.can(t.permissionKey)) {
-    ElMessage.warning('当前角色无权执行此操作')
+    ElMessage.warning(permissionTip(t.permissionKey))
     return
   }
   const actor = rolesStore.currentRole?.name || ''

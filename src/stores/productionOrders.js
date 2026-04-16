@@ -107,8 +107,46 @@ function migrateRemarkDone(o) {
 
 function migrateShippingApproval(o) {
   if (!o || typeof o !== 'object') return
-  if (typeof o.shipReleaseApproved !== 'boolean') o.shipReleaseApproved = false
+  if (typeof o.shipReleaseApproved !== 'boolean') {
+    const raw = o.shipReleaseApproved
+    if (typeof raw === 'string') {
+      const v = raw.trim().toLowerCase()
+      o.shipReleaseApproved = ['true', '1', 'yes', 'ok', 'approved', '同意', '已同意', '通过', '已通过'].includes(v)
+    } else if (typeof raw === 'number') {
+      o.shipReleaseApproved = raw > 0
+    } else {
+      // 兼容旧数据：若已在“待出货”，视作已放行
+      o.shipReleaseApproved = o.status === '待出货'
+    }
+  }
   if (typeof o.shipReleaseBy !== 'string') o.shipReleaseBy = ''
+  if (o.shipReleaseApproved && !o.shipReleaseBy) o.shipReleaseBy = '—'
+}
+
+function migrateShipmentRecords(o) {
+  if (!o || typeof o !== 'object') return
+  if (!Array.isArray(o.shipments)) o.shipments = []
+  let seq = Number(o.shipmentSeq) || 0
+  let shippedByLogs = 0
+  for (const s of o.shipments) {
+    if (!s || typeof s !== 'object') continue
+    s.id = String(s.id || '').trim() || ''
+    s.date = String(s.date || todayStr()).trim() || todayStr()
+    s.qty = Math.max(0, Number(s.qty) || 0)
+    s.manager = String(s.manager || s.by || '').trim() || '—'
+    s.tracking = String(s.tracking || '').trim()
+    s.note = String(s.note || '').trim()
+    shippedByLogs += s.qty
+    if (s.id.startsWith('SH-')) {
+      const tail = Number(String(s.id).split('-').pop())
+      if (!Number.isNaN(tail)) seq = Math.max(seq, tail)
+    }
+  }
+  o.shipmentSeq = seq
+  if (typeof o.shippedQty !== 'number') o.shippedQty = 0
+  if (!o.shippedQty && shippedByLogs > 0) {
+    o.shippedQty = Math.min(Number(o.totalQty) || 0, shippedByLogs)
+  }
 }
 
 /** 旧版「待出货」但未放行 → 待出货审批，由厂长审批后再进入待出货 */
@@ -148,6 +186,7 @@ function loadInitial() {
           migrateLineRemarks(o)
           migrateRemarkDone(o)
           migrateShippingApproval(o)
+          migrateShipmentRecords(o)
           migrateShipPendingApproval(o)
         })
         return parsed
@@ -164,6 +203,7 @@ function loadInitial() {
     migrateLineRemarks(o)
     migrateRemarkDone(o)
     migrateShippingApproval(o)
+    migrateShipmentRecords(o)
     migrateShipPendingApproval(o)
   })
   return seed
@@ -300,11 +340,33 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
     o.shipReleaseBy = approved ? (String(by || '').trim() || '—') : ''
   }
 
-  function recordShipment(orderId, qty) {
+  function recordShipment(orderId, payload) {
     const o = orders.value.find((x) => x.id === orderId)
-    if (!o) return
-    const delta = Math.max(0, Number(qty) || 0)
-    o.shippedQty = Math.min(o.totalQty, (Number(o.shippedQty) || 0) + delta)
+    if (!o) return { ok: false, message: '未找到订单' }
+    migrateShipmentRecords(o)
+    const reqQty = Math.max(0, Number(typeof payload === 'object' ? payload?.qty : payload) || 0)
+    if (!reqQty) return { ok: false, message: '出货数量必须大于 0' }
+    const total = Math.max(0, Number(o.totalQty) || 0)
+    const shipped = Math.max(0, Number(o.shippedQty) || 0)
+    const remaining = Math.max(0, total - shipped)
+    if (!remaining) return { ok: false, message: '该订单已全部出货' }
+    const actualQty = Math.min(reqQty, remaining)
+    o.shippedQty = shipped + actualQty
+    o.shipmentSeq = (Number(o.shipmentSeq) || 0) + 1
+    o.shipments.unshift({
+      id: `SH-${o.id}-${String(o.shipmentSeq).padStart(3, '0')}`,
+      date: String(payload?.date || todayStr()),
+      qty: actualQty,
+      manager: String(payload?.manager || payload?.by || '—').trim() || '—',
+      tracking: String(payload?.tracking || '').trim(),
+      note: String(payload?.note || '').trim(),
+    })
+    return {
+      ok: true,
+      qty: actualQty,
+      done: o.shippedQty >= total,
+      shipmentId: o.shipments[0]?.id || '',
+    }
   }
 
   function setAllowPartialShip(orderId, allow) {
@@ -357,6 +419,8 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
       remarkEntries: buildInitialRemarkEntries(payload),
       lines,
       shippedQty: 0,
+      shipments: [],
+      shipmentSeq: 0,
       shipReleaseApproved: false,
       shipReleaseBy: '',
       allowPartialShip: !!payload.allowPartialShip,

@@ -49,6 +49,12 @@ const routes = [
         component: () => import('@/views/Customers.vue'),
       },
       {
+        path: 'suppliers',
+        name: 'Suppliers',
+        meta: { title: '供应商管理', perm: 'supplier' },
+        component: () => import('@/views/suppliers/SupplierManagement.vue'),
+      },
+      {
         path: 'purchase/requests',
         name: 'PurchaseRequestList',
         meta: { title: '采购申请', perm: 'purchase' },
@@ -123,8 +129,8 @@ const routes = [
       {
         path: 'warehouse',
         name: 'Warehouse',
-        meta: { title: '仓库', perm: 'dashboard', placeholder: true, page: 'warehouse' },
-        component: () => import('@/views/PlaceholderPage.vue'),
+        meta: { title: '仓库', perm: 'warehouse' },
+        component: () => import('@/views/warehouse/WarehouseInventory.vue'),
       },
     ],
   },
