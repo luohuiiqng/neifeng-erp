@@ -98,7 +98,7 @@
               </template>
             </el-table-column>
           </el-table>
-          <h4 class="nf-subtitle">生产中（含待出货审批 / 待出货）</h4>
+          <h4 class="nf-subtitle">生产中（含待出货审批 / 待出货 / 已出货）</h4>
           <el-table :data="producingOrdersPreview" stripe style="width: 100%">
             <el-table-column prop="id" label="订单号" width="160" />
             <el-table-column prop="customer" label="客户" />

@@ -111,6 +111,20 @@ function defaultStatuses() {
       showShipReleaseExtra: true,
     },
     {
+      id: 'st-shipped',
+      code: '已出货',
+      name: '已出货',
+      sortOrder: 75,
+      tagType: 'success',
+      isDraft: false,
+      isClosed: false,
+      countsAsRunning: true,
+      workshopPanel: 'produce',
+      allowsShippingSubmit: false,
+      showShipPendingExtra: false,
+      showShipReleaseExtra: false,
+    },
+    {
       id: 'st-done',
       code: '已结案',
       name: '已结案',
@@ -228,6 +242,19 @@ function normalizeTransitionLabels(transitions) {
   })
 }
 
+/** 本地已保存的工作流补全新版默认状态（如新增「已出货」），避免整表重置 */
+function mergeMissingDefaultStatuses(parsed) {
+  if (!parsed || !Array.isArray(parsed.statuses)) return parsed
+  const defaults = defaultStatuses()
+  const list = parsed.statuses
+  for (const d of defaults) {
+    if (!list.some((s) => s && s.code === d.code)) {
+      list.push(clone(d))
+    }
+  }
+  return parsed
+}
+
 function loadInitial() {
   if (localStorage.getItem(SCHEMA_KEY) !== SCHEMA_VER) {
     localStorage.removeItem(STORAGE_KEY)
@@ -238,6 +265,7 @@ function loadInitial() {
     if (raw) {
       const parsed = JSON.parse(raw)
       if (parsed?.statuses?.length && parsed?.transitions?.length) {
+        mergeMissingDefaultStatuses(parsed)
         return {
           ...parsed,
           transitions: normalizeTransitionLabels(parsed.transitions),

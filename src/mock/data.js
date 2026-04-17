@@ -43,7 +43,7 @@ export const productionOrders = [
     signedAt: '2026-03-10',
     dueDate: '2026-04-15',
     owner: '徐总',
-    status: '待出货',
+    status: '已出货',
     totalQty: 1,
     remarkEntries: [
       {
@@ -72,7 +72,18 @@ export const productionOrders = [
         note: '带自动离合功能；配切刀倒转按钮（客户强调）',
       },
     ],
-    shippedQty: 0,
+    shippedQty: 1,
+    shipmentSeq: 1,
+    shipments: [
+      {
+        id: 'SH-MO-2026-0312-008-001',
+        date: '2026-04-08',
+        qty: 1,
+        manager: '仓库',
+        tracking: '',
+        note: '首批发货',
+      },
+    ],
     shipReleaseApproved: true,
     shipReleaseBy: '厂长',
     allowPartialShip: false,

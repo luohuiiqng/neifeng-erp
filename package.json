@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:nei_erp": "vite build --base /nei_erp/",
+    "build:rich_full": "vite build --base /rich_full/",
     "preview": "vite preview"
   },
   "dependencies": {

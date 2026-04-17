@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { productionOrders as seedFromMock } from '@/mock/data'
+import { isProductionOrderReceivedAmountLocked } from '@/utils/orderCloseRules'
 
 const STORAGE_KEY = 'nf_erp_proto_production_orders'
 const SCHEMA_KEY = 'nf_erp_proto_orders_schema'
-const SCHEMA_VER = '3'
+const SCHEMA_VER = '4'
 
 function clone(obj) {
   return JSON.parse(JSON.stringify(obj))
@@ -123,6 +124,72 @@ function migrateShippingApproval(o) {
   if (o.shipReleaseApproved && !o.shipReleaseBy) o.shipReleaseBy = '—'
 }
 
+function lineRemainingQty(line) {
+  const q = Math.max(0, Number(line?.qty) || 0)
+  const sh = Math.max(0, Number(line?.shippedQty) || 0)
+  return Math.max(0, q - sh)
+}
+
+/** 明细行已出数量；旧数据仅有订单 shippedQty 时按行顺序填满 */
+function migrateLineShippedQty(o) {
+  if (!o?.lines || !Array.isArray(o.lines)) return
+  for (const line of o.lines) {
+    if (line == null || typeof line !== 'object') continue
+    if (line.shippedQty == null || !Number.isFinite(Number(line.shippedQty))) line.shippedQty = 0
+    line.shippedQty = Math.max(0, Math.floor(Number(line.shippedQty)))
+    line.shippedQty = Math.min(line.shippedQty, Math.max(0, Number(line.qty) || 0))
+  }
+  const header = Math.max(0, Number(o.shippedQty) || 0)
+  const sumLines = o.lines.reduce((s, l) => s + (Number(l.shippedQty) || 0), 0)
+  if (sumLines === 0 && header > 0) {
+    let remain = header
+    for (const line of o.lines) {
+      const cap = Math.max(0, Number(line.qty) || 0)
+      line.shippedQty = Math.min(cap, remain)
+      remain -= line.shippedQty
+      if (remain <= 0) break
+    }
+    if (remain > 0 && o.lines.length) {
+      const last = o.lines[o.lines.length - 1]
+      const cap = Math.max(0, Number(last.qty) || 0)
+      last.shippedQty = Math.min(cap, (Number(last.shippedQty) || 0) + remain)
+    }
+  } else if (sumLines > 0 && header === 0) {
+    o.shippedQty = Math.min(Math.max(0, Number(o.totalQty) || 0), sumLines)
+  } else if (sumLines > 0 && header !== sumLines) {
+    o.shippedQty = Math.min(Math.max(0, Number(o.totalQty) || 0), sumLines)
+  }
+}
+
+function migratePendingShipmentPlan(o) {
+  if (!o || typeof o !== 'object') return
+  if (o.pendingShipmentPlan == null) {
+    o.pendingShipmentPlan = null
+    return
+  }
+  if (typeof o.pendingShipmentPlan !== 'object') {
+    o.pendingShipmentPlan = null
+    return
+  }
+  const p = o.pendingShipmentPlan
+  if (!Array.isArray(p.lineAllocations)) {
+    o.pendingShipmentPlan = null
+    return
+  }
+  p.lineAllocations = p.lineAllocations
+    .map((x) => ({
+      lineId: String(x?.lineId || '').trim(),
+      qty: Math.max(0, Math.floor(Number(x?.qty) || 0)),
+    }))
+    .filter((x) => x.lineId && x.qty > 0)
+  const sum = p.lineAllocations.reduce((s, x) => s + x.qty, 0)
+  if (sum < 1) {
+    o.pendingShipmentPlan = null
+    return
+  }
+  p.batchQty = sum
+}
+
 function migrateShipmentRecords(o) {
   if (!o || typeof o !== 'object') return
   if (!Array.isArray(o.shipments)) o.shipments = []
@@ -133,6 +200,15 @@ function migrateShipmentRecords(o) {
     s.id = String(s.id || '').trim() || ''
     s.date = String(s.date || todayStr()).trim() || todayStr()
     s.qty = Math.max(0, Number(s.qty) || 0)
+    if (!Array.isArray(s.lineAllocations)) s.lineAllocations = []
+    else {
+      s.lineAllocations = s.lineAllocations
+        .map((x) => ({
+          lineId: String(x?.lineId || '').trim(),
+          qty: Math.max(0, Math.floor(Number(x?.qty) || 0)),
+        }))
+        .filter((x) => x.lineId && x.qty > 0)
+    }
     s.manager = String(s.manager || s.by || '').trim() || '—'
     s.tracking = String(s.tracking || '').trim()
     s.note = String(s.note || '').trim()
@@ -153,6 +229,17 @@ function migrateShipmentRecords(o) {
 function migrateShipPendingApproval(o) {
   if (!o || typeof o !== 'object') return
   if (o.status === '待出货' && o.shipReleaseApproved === false) o.status = '待出货审批'
+}
+
+/** 出货台数已满且已放行时，「待出货」自动推进为「已出货」（与结案、界面语义一致） */
+function migrateShippedCompleteStatus(o) {
+  if (!o || typeof o !== 'object') return
+  const total = Math.max(0, Number(o.totalQty) || 0)
+  const shipped = Math.max(0, Number(o.shippedQty) || 0)
+  if (total <= 0 || shipped < total) return
+  if (o.status !== '待出货') return
+  if (o.shipReleaseApproved === false) return
+  o.status = '已出货'
 }
 
 function buildInitialRemarkEntries(payload) {
@@ -188,6 +275,9 @@ function loadInitial() {
           migrateShippingApproval(o)
           migrateShipmentRecords(o)
           migrateShipPendingApproval(o)
+          migrateShippedCompleteStatus(o)
+          migrateLineShippedQty(o)
+          migratePendingShipmentPlan(o)
         })
         return parsed
       }
@@ -205,6 +295,9 @@ function loadInitial() {
     migrateShippingApproval(o)
     migrateShipmentRecords(o)
     migrateShipPendingApproval(o)
+    migrateShippedCompleteStatus(o)
+    migrateLineShippedQty(o)
+    migratePendingShipmentPlan(o)
   })
   return seed
 }
@@ -261,6 +354,21 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
     if (o) o.status = status
   }
 
+  /** 更新已回款；仅已结案后不可再改。 */
+  function setOrderReceivedAmount(orderId, nextReceived) {
+    const o = orders.value.find((x) => x.id === orderId)
+    if (!o) return { ok: false, message: '未找到订单' }
+    if (isProductionOrderReceivedAmountLocked(o)) {
+      return { ok: false, message: '该订单已结案，已回款金额不可再修改。' }
+    }
+    const cap = Math.max(0, Number(o.contractAmount) || 0)
+    let n = Math.max(0, Number(nextReceived))
+    if (!Number.isFinite(n)) n = 0
+    if (n > cap) n = cap
+    o.receivedAmount = Math.floor(n)
+    return { ok: true }
+  }
+
   /** 追加主信息备注（不覆盖历史） */
   function appendRemark(orderId, { text, priority, by }) {
     const o = orders.value.find((x) => x.id === orderId)
@@ -296,6 +404,58 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
     const o = orders.value.find((x) => x.id === orderId)
     if (!o) return
     migrateLineRemarks(o)
+    migrateLineShippedQty(o)
+  }
+
+  function clearPendingShipmentPlan(orderId) {
+    const o = orders.value.find((x) => x.id === orderId)
+    if (o) o.pendingShipmentPlan = null
+  }
+
+  /** 提交出货审批时写入：本批计划在订单各明细上的台数分配（出货确认须与此一致）。 */
+  function setPendingShipmentPlan(orderId, { lineAllocations }) {
+    const o = orders.value.find((x) => x.id === orderId)
+    if (!o) return { ok: false, message: '未找到订单' }
+    migrateLineRemarks(o)
+    migrateLineShippedQty(o)
+    const lines = o.lines || []
+    const clean = []
+    for (const a of lineAllocations || []) {
+      const lineId = String(a?.lineId || '').trim()
+      const q = Math.max(0, Math.floor(Number(a?.qty) || 0))
+      if (!lineId || !q) continue
+      const line = lines.find((l) => l.lineId === lineId)
+      if (!line) return { ok: false, message: '存在无效的明细行' }
+      const rem = lineRemainingQty(line)
+      if (q > rem) return { ok: false, message: '本批计划在部分明细上超过该条明细的待出数量' }
+      clean.push({ lineId, qty: q })
+    }
+    const batchQty = clean.reduce((s, x) => s + x.qty, 0)
+    if (batchQty < 1) return { ok: false, message: '本批计划出货台数至少为 1' }
+    const orderRem = Math.max(0, (Number(o.totalQty) || 0) - (Number(o.shippedQty) || 0))
+    if (batchQty > orderRem) return { ok: false, message: '本批计划合计不能超过订单待出总台数' }
+    if (!o.allowPartialShip && batchQty !== orderRem) {
+      return { ok: false, message: `整单出货须一次排满全部待出 ${orderRem} 台` }
+    }
+    o.pendingShipmentPlan = { batchQty, lineAllocations: clean }
+    return { ok: true }
+  }
+
+  function pendingShipmentMatchesPlan(o, normalizedAllocations) {
+    const p = o?.pendingShipmentPlan
+    if (!p?.lineAllocations?.length) return true
+    const sumNorm = normalizedAllocations.reduce((s, x) => s + x.qty, 0)
+    if (p.batchQty !== sumNorm) return false
+    const normMap = new Map(normalizedAllocations.map((x) => [x.lineId, x.qty]))
+    for (const x of p.lineAllocations) {
+      if ((normMap.get(x.lineId) || 0) !== x.qty) return false
+    }
+    for (const [lid, q] of normMap) {
+      const pi = p.lineAllocations.find((a) => a.lineId === lid)
+      const expected = pi ? pi.qty : 0
+      if (q !== expected) return false
+    }
+    return true
   }
 
   function appendLineRemark(orderId, lineId, { text, priority, by }) {
@@ -344,23 +504,61 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
     const o = orders.value.find((x) => x.id === orderId)
     if (!o) return { ok: false, message: '未找到订单' }
     migrateShipmentRecords(o)
-    const reqQty = Math.max(0, Number(typeof payload === 'object' ? payload?.qty : payload) || 0)
-    if (!reqQty) return { ok: false, message: '出货数量必须大于 0' }
+    migrateLineShippedQty(o)
+    migrateLineRemarks(o)
+    const lines = o.lines || []
+    const reqQty = Math.max(0, Math.floor(Number(typeof payload === 'object' ? payload?.qty : payload) || 0))
+    let allocations = Array.isArray(payload?.lineAllocations) ? payload.lineAllocations : []
+    if (!allocations.length) {
+      if (lines.length === 1) {
+        allocations = [{ lineId: lines[0].lineId, qty: reqQty }]
+      } else {
+        return { ok: false, message: '请按订单明细逐条填写本次拟出的台数' }
+      }
+    }
+    const normalized = []
+    for (const a of allocations) {
+      const lid = String(a?.lineId || '').trim()
+      const q = Math.max(0, Math.floor(Number(a?.qty) || 0))
+      if (!lid || !q) continue
+      const line = lines.find((l) => l.lineId === lid)
+      if (!line) return { ok: false, message: '无效的明细行' }
+      const rem = lineRemainingQty(line)
+      if (q > rem) return { ok: false, message: '某条订单明细本次出货超过该条待出数量' }
+      normalized.push({ lineId: lid, qty: q })
+    }
+    const actualQty = normalized.reduce((s, x) => s + x.qty, 0)
+    if (!actualQty) return { ok: false, message: '出货数量必须大于 0' }
+    if (reqQty && reqQty !== actualQty) {
+      return { ok: false, message: '本批次总台数须与各条明细本次出货台数之和一致' }
+    }
+    if (!pendingShipmentMatchesPlan(o, normalized)) {
+      return { ok: false, message: '本次明细出货须与「提交出货审批」时填写的本批计划一致' }
+    }
     const total = Math.max(0, Number(o.totalQty) || 0)
     const shipped = Math.max(0, Number(o.shippedQty) || 0)
     const remaining = Math.max(0, total - shipped)
     if (!remaining) return { ok: false, message: '该订单已全部出货' }
-    const actualQty = Math.min(reqQty, remaining)
+    if (actualQty > remaining) return { ok: false, message: '本次出货超过订单待出总台数' }
+    for (const x of normalized) {
+      const line = lines.find((l) => l.lineId === x.lineId)
+      line.shippedQty = Math.max(0, Number(line.shippedQty) || 0) + x.qty
+    }
     o.shippedQty = shipped + actualQty
     o.shipmentSeq = (Number(o.shipmentSeq) || 0) + 1
     o.shipments.unshift({
       id: `SH-${o.id}-${String(o.shipmentSeq).padStart(3, '0')}`,
       date: String(payload?.date || todayStr()),
       qty: actualQty,
+      lineAllocations: normalized.map((x) => ({ lineId: x.lineId, qty: x.qty })),
       manager: String(payload?.manager || payload?.by || '—').trim() || '—',
       tracking: String(payload?.tracking || '').trim(),
       note: String(payload?.note || '').trim(),
     })
+    o.pendingShipmentPlan = null
+    if (total > 0 && o.shippedQty >= total && o.status === '待出货' && o.shipReleaseApproved !== false) {
+      o.status = '已出货'
+    }
     return {
       ok: true,
       qty: actualQty,
@@ -374,6 +572,20 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
     if (!o) return false
     o.allowPartialShip = !!allow
     return true
+  }
+
+  /** 仅「允许分批出货」时可调整出货目标台数（写入 totalQty），须 ≥ 已出货。 */
+  function setShippableTotalQty(orderId, nextTotal) {
+    const o = orders.value.find((x) => x.id === orderId)
+    if (!o) return { ok: false, message: '未找到订单' }
+    if (!o.allowPartialShip) return { ok: false, message: '仅「允许分批出货」的订单可调整出货目标台数' }
+    const shipped = Math.max(0, Number(o.shippedQty) || 0)
+    let n = Math.floor(Number(nextTotal))
+    if (!Number.isFinite(n)) n = shipped
+    if (n < 1) return { ok: false, message: '出货目标台数须为正整数' }
+    if (n < shipped) return { ok: false, message: '出货目标台数不能小于已出货台数' }
+    o.totalQty = n
+    return { ok: true }
   }
 
   function addOrder(payload) {
@@ -401,6 +613,7 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
         temp: String(l.temp ?? '').trim() || '—',
         stitch: String(l.stitch ?? '').trim() || '—',
         qty: Number(l.qty) || 0,
+        shippedQty: 0,
         punch: String(l.punch ?? '').trim() || '—',
         note,
         noteRemarkEntries,
@@ -424,6 +637,7 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
       shipReleaseApproved: false,
       shipReleaseBy: '',
       allowPartialShip: !!payload.allowPartialShip,
+      pendingShipmentPlan: null,
       contractAmount: Number(payload.contractAmount) || 0,
       receivedAmount: Number(payload.receivedAmount) || 0,
     }
@@ -443,5 +657,9 @@ export const useProductionOrderStore = defineStore('productionOrders', () => {
     setShipRelease,
     recordShipment,
     setAllowPartialShip,
+    setShippableTotalQty,
+    setPendingShipmentPlan,
+    clearPendingShipmentPlan,
+    setOrderReceivedAmount,
   }
 })

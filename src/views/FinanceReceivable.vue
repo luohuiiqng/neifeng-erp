@@ -27,7 +27,7 @@
         </el-table-column>
         <el-table-column v-if="!rolesStore.canViewOrderFinancials()" label="金额信息" min-width="160">
           <template #default>
-            <span class="nf-masked">金额列仅厂长（及管理员）可见；可操作「申请结案」仍以订单数据为准。</span>
+            <span class="nf-masked">金额列仅厂长（及管理员）可见；「申请结案」须回款结清且生产状态为「已出货」。</span>
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
@@ -35,24 +35,21 @@
             <el-tag :type="row.open <= 0 ? 'success' : 'warning'" size="small">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link @click="$router.push(`/production-orders/${row.id}`)">生产订单</el-button>
-            <el-tooltip
-              v-if="row.open <= 0 && row.status !== '已结案'"
-              :disabled="rolesStore.can('action_finance_apply_close')"
-              :content="permissionTip('action_finance_apply_close')"
-              placement="top"
+            <el-button
+              v-if="(rolesStore.can('finance') || rolesStore.canViewOrderFinancials()) && !row.receiveLocked"
+              type="warning"
+              link
+              @click="openReceiveDialog(row)"
             >
+              登记回款
+            </el-button>
+            <span v-else-if="(rolesStore.can('finance') || rolesStore.canViewOrderFinancials()) && row.receiveLocked" class="nf-muted">回款已锁定</span>
+            <el-tooltip v-if="!row.moClosed" :disabled="closeApplyEnabled(row)" :content="closeApplyTooltip(row)" placement="top">
               <span>
-                <el-button
-                  type="success"
-                  link
-                  :disabled="!rolesStore.can('action_finance_apply_close')"
-                  @click="goClose(row)"
-                >
-                  申请结案
-                </el-button>
+                <el-button type="success" link :disabled="!closeApplyEnabled(row)" @click="goClose(row)">申请结案</el-button>
               </span>
             </el-tooltip>
           </template>
@@ -85,6 +82,22 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <el-dialog v-model="receiveDialogVisible" title="登记回款" width="440px" destroy-on-close @closed="receiveDialogOrderId = ''">
+      <p v-if="receiveDialogOrder" class="nf-muted">订单 {{ receiveDialogOrder.id }} · {{ receiveDialogOrder.customer }}</p>
+      <el-form v-if="receiveDialogOrder" label-width="100px" class="nf-mt">
+        <el-form-item label="合同金额">
+          <span>¥{{ receiveDialogContract.toLocaleString() }}</span>
+        </el-form-item>
+        <el-form-item label="已回款" required>
+          <el-input-number v-model="receiveDialogDraft" :min="0" :max="receiveDialogContract" :step="1000" style="width: 220px" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="receiveDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmReceiveDialog">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -99,6 +112,11 @@ import { useOrderWorkflowStore } from '@/stores/orderWorkflow'
 import { usePurchaseOrderStore } from '@/stores/purchaseOrders'
 import { useApprovalsStore } from '@/stores/approvals'
 import { permissionTip } from '@/utils/permissionMeta'
+import {
+  isProductionOrderFullyShipped,
+  isProductionOrderReadyForCaseClose,
+  isProductionOrderReceivedAmountLocked,
+} from '@/utils/orderCloseRules'
 
 const router = useRouter()
 const kw = ref('')
@@ -106,7 +124,8 @@ const activeTab = ref('ar')
 const rolesStore = useRolesStore()
 const wfStore = useOrderWorkflowStore()
 const approvalsStore = useApprovalsStore()
-const { orders } = storeToRefs(useProductionOrderStore())
+const poStore = useProductionOrderStore()
+const { orders } = storeToRefs(poStore)
 const { orders: purchaseOrders } = storeToRefs(usePurchaseOrderStore())
 
 const rows = computed(() =>
@@ -114,6 +133,8 @@ const rows = computed(() =>
     .filter((o) => !wfStore.isDraftStatus(o.status))
     .map((o) => {
       const open = o.contractAmount - o.receivedAmount
+      const totalQty = Math.max(0, Number(o.totalQty) || 0)
+      const shippedQty = Math.max(0, Number(o.shippedQty) || 0)
       return {
         id: o.id,
         customer: o.customer,
@@ -121,10 +142,48 @@ const rows = computed(() =>
         received: o.receivedAmount,
         open,
         status: open <= 0 ? '待结案' : '未结清',
+        totalQty,
+        shippedQty,
+        moStatus: o.status,
+        shipComplete: isProductionOrderFullyShipped(o),
+        closeReady: isProductionOrderReadyForCaseClose(o),
+        moClosed: wfStore.isClosedStatus(o.status),
+        receiveLocked: isProductionOrderReceivedAmountLocked(o),
       }
     })
     .filter((r) => !kw.value.trim() || r.customer.includes(kw.value.trim())),
 )
+
+const receiveDialogVisible = ref(false)
+const receiveDialogOrderId = ref('')
+const receiveDialogDraft = ref(0)
+const receiveDialogOrder = computed(() => orders.value.find((o) => o.id === receiveDialogOrderId.value) || null)
+const receiveDialogContract = computed(() => Math.max(0, Number(receiveDialogOrder.value?.contractAmount) || 0))
+
+function openReceiveDialog(row) {
+  if (!rolesStore.can('finance') && !rolesStore.canViewOrderFinancials()) return
+  const o = orders.value.find((x) => x.id === row.id)
+  if (!o) return
+  if (isProductionOrderReceivedAmountLocked(o)) {
+    ElMessage.warning('本单已结案，已回款不可再改')
+    return
+  }
+  receiveDialogOrderId.value = row.id
+  receiveDialogDraft.value = Math.max(0, Number(o.receivedAmount) || 0)
+  receiveDialogVisible.value = true
+}
+
+function confirmReceiveDialog() {
+  const id = receiveDialogOrderId.value
+  if (!id) return
+  const r = poStore.setOrderReceivedAmount(id, receiveDialogDraft.value)
+  if (!r?.ok) {
+    ElMessage.warning(r?.message || '保存失败')
+    return
+  }
+  ElMessage.success('已更新已回款')
+  receiveDialogVisible.value = false
+}
 
 const payableRows = computed(() => {
   const k = kw.value.trim()
@@ -151,12 +210,54 @@ function nowTimeStr() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+function closeApplyEnabled(row) {
+  return !!row?.closeReady && rolesStore.can('action_finance_apply_close')
+}
+
+function closeApplyTooltip(row) {
+  if (!row?.shipComplete) {
+    return `须全部出货后方可申请结案（当前已出 ${row.shippedQty} / ${row.totalQty} 台）`
+  }
+  if (!row?.closeReady) {
+    const st = row.moStatus || '—'
+    return `须生产订单状态为「已出货」后方可申请结案（出货页登记满台数后会自动从「待出货」转入；当前为「${st}」）`
+  }
+  if (row.open > 0) {
+    return `须回款结清（未收为 ¥0）后方可申请结案；当前未收 ¥${row.open.toLocaleString()}`
+  }
+  if (!rolesStore.can('action_finance_apply_close')) {
+    return permissionTip('action_finance_apply_close')
+  }
+  return '点击后生成一条「结案审批」待办，厂长（或具备结案审批权限的角色）在审批中心处理'
+}
+
 function goClose(row) {
   if (!rolesStore.can('action_finance_apply_close')) {
     ElMessage.warning(permissionTip('action_finance_apply_close'))
     return
   }
   if (!row?.id) return
+  const order = orders.value.find((o) => o.id === row.id)
+  if (!isProductionOrderReadyForCaseClose(order)) {
+    if (!isProductionOrderFullyShipped(order)) {
+      const t = Math.max(0, Number(order?.totalQty) || 0)
+      const s = Math.max(0, Number(order?.shippedQty) || 0)
+      ElMessage.warning(`须全部出货后方可申请结案（当前已出 ${s} / ${t} 台）`)
+    } else {
+      ElMessage.warning(
+        `须生产订单状态为「已出货」后方可申请结案（出货确认登记满台数后自动转入；当前为「${order?.status || '—'}」）`,
+      )
+    }
+    return
+  }
+  if (wfStore.isClosedStatus(order?.status)) {
+    ElMessage.warning('该订单已结案')
+    return
+  }
+  if (row.open > 0) {
+    ElMessage.warning(`须回款结清后方可申请结案（当前未收 ¥${row.open.toLocaleString()}）`)
+    return
+  }
   if (approvalsStore.hasPendingTypeRef('结案审批', row.id)) {
     ElMessage.warning('该订单已有待审批的结案申请')
     return
@@ -204,5 +305,8 @@ function auditTagType(status) {
   font-size: 13px;
   color: #6b7280;
   line-height: 1.45;
+}
+.nf-mt {
+  margin-top: 10px;
 }
 </style>

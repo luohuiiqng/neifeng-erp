@@ -33,7 +33,7 @@ function nextTxId(txs) {
   return `TX-${String(max + 1).padStart(6, '0')}`
 }
 
-const CATEGORIES = ['原材料', '半成品', '零部件']
+const CATEGORIES = ['原材料', '半成品', '零部件', '成品']
 
 const RAW_TEMPLATES = [
   { name: 'Q235B 钢板', unit: '张', specs: ['4mm*1500*6000', '6mm*1500*6000', '8mm*1500*6000'] },
@@ -79,8 +79,17 @@ function normalizeCategory(category) {
   if (!c) return '零部件'
   if (CATEGORIES.includes(c)) return c
   if (c.includes('半成')) return '半成品'
+  if (c.includes('成品') || c === '产成品') return '成品'
   if (c.includes('原材') || c.includes('板材') || c.includes('型材')) return '原材料'
   return '零部件'
+}
+
+function defaultLocationByCategory(category) {
+  const cat = normalizeCategory(category)
+  if (cat === '原材料') return 'R-待分配'
+  if (cat === '半成品') return 'S-待分配'
+  if (cat === '成品') return 'F-待分配'
+  return 'P-待分配'
 }
 
 function buildCategoryMaterials(startIndex, category, zonePrefix, templates, count) {
@@ -189,13 +198,14 @@ export const useWarehouseStore = defineStore('warehouse', () => {
     )
     if (existsByMeta) return existsByMeta.code
     const newCode = nextCode(data.value.materials)
+    const cat = normalizeCategory(payload.category)
     data.value.materials.push({
       code: newCode,
       name: name || '未命名物料',
       spec,
       unit,
-      category: normalizeCategory(payload.category),
-      location: String(payload.location || '').trim() || '待分配',
+      category: cat,
+      location: String(payload.location || '').trim() || defaultLocationByCategory(cat),
       safetyQty: Math.max(0, Number(payload.safetyQty) || 0),
       stockQty: Math.max(0, Number(payload.stockQty) || 0),
       lastInDate: '',
@@ -260,6 +270,58 @@ export const useWarehouseStore = defineStore('warehouse', () => {
     return { ok: true }
   }
 
+  /**
+   * 仓库手工新增物料（原材料 / 半成品 / 成品 / 零部件）
+   * @returns {{ ok: true, code: string } | { ok: false, message: string }}
+   */
+  function addMaterial(payload = {}) {
+    const name = String(payload.name || '').trim()
+    if (!name) return { ok: false, message: '请输入物料名称' }
+    const category = normalizeCategory(payload.category)
+    const unit = String(payload.unit || '').trim() || '件'
+    const spec = String(payload.spec || '').trim()
+    const dup = data.value.materials.find(
+      (m) =>
+        m.name === name &&
+        String(m.spec || '') === spec &&
+        String(m.unit || '') === unit &&
+        m.category === category,
+    )
+    if (dup) return { ok: false, message: `同分类下已存在相同名称/规格/单位：${dup.code}` }
+    const newCode = nextCode(data.value.materials)
+    const location = String(payload.location || '').trim() || defaultLocationByCategory(category)
+    const safetyQty = Math.max(0, Number(payload.safetyQty) || 0)
+    const initialStock = Math.max(0, Number(payload.stockQty ?? payload.initialStock) || 0)
+    const date = String(payload.date || todayStr()).trim() || todayStr()
+    const operator = String(payload.operator || '').trim() || '仓管'
+
+    data.value.materials.push({
+      code: newCode,
+      name,
+      spec,
+      unit,
+      category,
+      location,
+      safetyQty,
+      stockQty: initialStock,
+      lastInDate: initialStock > 0 ? date : '',
+      lastOutDate: '',
+    })
+    if (initialStock > 0) {
+      addTransaction({
+        type: '入库',
+        materialCode: newCode,
+        qty: initialStock,
+        date,
+        operator,
+        refType: '手工建档',
+        refId: '',
+        note: String(payload.note || '').trim() || '新增物料期初库存',
+      })
+    }
+    return { ok: true, code: newCode }
+  }
+
   function adjustStock(payload) {
     const code = String(payload.materialCode || '').trim()
     const m = materialByCode(code)
@@ -284,6 +346,7 @@ export const useWarehouseStore = defineStore('warehouse', () => {
     data,
     materialByCode,
     ensureMaterial,
+    addMaterial,
     receiveInbound,
     issueOutbound,
     adjustStock,

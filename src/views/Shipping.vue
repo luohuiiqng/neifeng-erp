@@ -44,8 +44,15 @@
         </el-descriptions>
 
         <div class="nf-kpis">
-          <el-tag type="info" effect="plain">订单总台数：{{ totalQty }}</el-tag>
-          <el-tag :type="shippedQty >= totalQty && totalQty > 0 ? 'success' : 'warning'" effect="plain">已出货：{{ shippedQty }}</el-tag>
+          <el-tag type="info" effect="plain">
+            {{ selectedOrder.allowPartialShip ? '出货目标台数' : '订单总台数' }}：{{ orderTotalForShip }}
+          </el-tag>
+          <el-tag
+            :type="shippedQty >= orderTotalForShip && orderTotalForShip > 0 ? 'success' : 'warning'"
+            effect="plain"
+          >
+            已出货：{{ shippedQty }}
+          </el-tag>
           <el-tag type="danger" effect="plain">待出货：{{ remainingQty }}</el-tag>
           <el-tag type="primary" effect="plain">出货进度：{{ shipProgress }}%</el-tag>
         </div>
@@ -57,16 +64,42 @@
           </div>
         </div>
 
-        <h4 class="nf-h4">订单明细（本次出货参考）</h4>
-        <el-table :data="selectedOrder.lines || []" stripe border>
+        <el-alert
+          v-if="selectedOrder.pendingShipmentPlan?.batchQty"
+          type="success"
+          show-icon
+          :closable="false"
+          class="nf-block nf-ship-plan-alert"
+          title="已载入「提交出货审批」中的本批计划：须按下列明细原样出货（合计与各行须与审批一致）。"
+        />
+        <h4 class="nf-h4">订单明细（本次按明细出货）</h4>
+        <el-table :data="selectedOrder.lines || []" stripe border class="nf-ship-line-table">
           <el-table-column type="index" width="50" />
-          <el-table-column prop="unit" label="单位名称" width="140" />
-          <el-table-column prop="model" label="机型" min-width="180" />
-          <el-table-column prop="temp" label="冷/热" width="88" />
-          <el-table-column prop="stitch" label="缝包" width="90" />
-          <el-table-column prop="qty" label="台数" width="80" />
-          <el-table-column prop="punch" label="打孔" width="90" />
-          <el-table-column prop="note" label="备注" min-width="160" show-overflow-tooltip />
+          <el-table-column prop="unit" label="单位名称" width="120" />
+          <el-table-column prop="model" label="机型" min-width="160" />
+          <el-table-column prop="temp" label="冷/热" width="80" />
+          <el-table-column prop="stitch" label="缝包" width="82" />
+          <el-table-column prop="qty" label="合同" width="72" align="center" />
+          <el-table-column label="明细已出" width="82" align="center">
+            <template #default="{ row }">{{ row.shippedQty ?? 0 }}</template>
+          </el-table-column>
+          <el-table-column label="明细待出" width="82" align="center">
+            <template #default="{ row }">{{ lineRemainingForShip(row) }}</template>
+          </el-table-column>
+          <el-table-column label="本次出货" min-width="128" align="center">
+            <template #default="{ row }">
+              <el-input-number
+                :model-value="lineShipDraft[row.lineId] ?? 0"
+                :min="0"
+                :max="lineRemainingForShip(row)"
+                size="small"
+                controls-position="right"
+                @update:model-value="(v) => (lineShipDraft[row.lineId] = v)"
+              />
+            </template>
+          </el-table-column>
+          <el-table-column prop="punch" label="打孔" width="82" />
+          <el-table-column prop="note" label="备注" min-width="120" show-overflow-tooltip />
         </el-table>
 
         <div class="nf-h4-row">
@@ -82,6 +115,9 @@
           <el-table-column prop="id" label="批次号" width="190" />
           <el-table-column prop="date" label="出货日期" width="120" />
           <el-table-column prop="qty" label="出货台数" width="90" />
+          <el-table-column label="明细分摊" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">{{ formatShipmentLineAlloc(row) }}</template>
+          </el-table-column>
           <el-table-column prop="manager" label="发货负责人" width="120" />
           <el-table-column prop="tracking" label="物流单号" min-width="140" />
           <el-table-column prop="note" label="备注" min-width="180" show-overflow-tooltip />
@@ -91,15 +127,19 @@
 
       <h4 class="nf-h4">本次出货登记</h4>
       <el-form :model="form" label-width="120px" class="nf-form">
+        <el-form-item v-if="selectedOrder?.allowPartialShip" label="出货目标台数">
+          <el-input-number v-model="shippableTotalDraft" :min="minShippableTotal" :max="99999" />
+          <span class="nf-muted">须 ≥ 已出货（{{ shippedQty }}）；明细台数合计 {{ lineQtySum }} 台</span>
+        </el-form-item>
         <el-form-item label="出货日期">
           <el-date-picker v-model="form.date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" />
         </el-form-item>
         <el-form-item label="发货负责人">
           <el-input v-model="form.manager" placeholder="如：车间主任" style="max-width: 320px" />
         </el-form-item>
-        <el-form-item label="本批次台数">
-          <el-input-number v-model="form.qty" :min="1" :max="maxShipmentQty" />
-          <span class="nf-muted">本次最多可提交 {{ maxShipmentQty }} 台</span>
+        <el-form-item label="本批合计">
+          <span class="nf-batch-sum">{{ batchLineShipQty }} 台</span>
+          <span class="nf-muted">（由各明细「本次出货」合计；订单待出 {{ remainingQty }} 台）</span>
         </el-form-item>
         <el-form-item label="物流单号">
           <el-input v-model="form.tracking" placeholder="建议填写，便于售后追踪" style="max-width: 400px" />
@@ -148,36 +188,71 @@ const form = reactive({
   orderId: '',
   date: '',
   manager: '车间主任',
-  qty: 1,
   tracking: '',
   note: '',
 })
+const lineShipDraft = reactive({})
 
 const selectedOrder = computed(() => orders.value.find((o) => o.id === form.orderId))
-const totalQty = computed(() => Math.max(0, Number(selectedOrder.value?.totalQty) || 0))
+const lineQtySum = computed(() => {
+  const o = selectedOrder.value
+  if (!o || !Array.isArray(o.lines)) return 0
+  return o.lines.reduce((s, l) => s + (Number(l.qty) || 0), 0)
+})
+const shippableTotalDraft = ref(1)
 const shippedQty = computed(() => Math.max(0, Number(selectedOrder.value?.shippedQty) || 0))
-const remainingQty = computed(() => Math.max(0, totalQty.value - shippedQty.value))
+const minShippableTotal = computed(() => Math.max(1, shippedQty.value))
+const orderTotalForShip = computed(() => {
+  const o = selectedOrder.value
+  if (!o) return 0
+  if (o.allowPartialShip) {
+    const n = Math.floor(Number(shippableTotalDraft.value))
+    if (Number.isFinite(n) && n > 0) return n
+  }
+  return Math.max(0, Number(o.totalQty) || 0)
+})
+const remainingQty = computed(() => Math.max(0, orderTotalForShip.value - shippedQty.value))
 const shipReleaseReady = computed(() => {
   const o = selectedOrder.value
   if (!o) return false
   return !!o.shipReleaseApproved || wfStore.isShippableStatusCode(o.status)
 })
 const shipProgress = computed(() => {
-  if (!totalQty.value) return 0
-  return Math.min(100, Math.round((shippedQty.value / totalQty.value) * 100))
+  if (!orderTotalForShip.value) return 0
+  return Math.min(100, Math.round((shippedQty.value / orderTotalForShip.value) * 100))
 })
-const maxShipmentQty = computed(() => Math.max(1, remainingQty.value))
+const batchLineShipQty = computed(() => {
+  const o = selectedOrder.value
+  if (!o?.lines) return 0
+  return o.lines.reduce((s, l) => s + Math.max(0, Math.floor(Number(lineShipDraft[l.lineId]) || 0)), 0)
+})
+function lineRemainingForShip(row) {
+  const q = Math.max(0, Number(row?.qty) || 0)
+  const sh = Math.max(0, Number(row?.shippedQty) || 0)
+  return Math.max(0, q - sh)
+}
+const lineShipDraftValid = computed(() => {
+  const o = selectedOrder.value
+  if (!o?.lines?.length) return false
+  for (const l of o.lines) {
+    const q = Math.max(0, Math.floor(Number(lineShipDraft[l.lineId]) || 0))
+    if (q > lineRemainingForShip(l)) return false
+  }
+  if (batchLineShipQty.value < 1 || batchLineShipQty.value > remainingQty.value) return false
+  return true
+})
 const shipmentRows = computed(() => (Array.isArray(selectedOrder.value?.shipments) ? selectedOrder.value.shipments : []))
 const printShipmentId = ref('')
 const printTargetShipment = computed(() => shipmentRows.value.find((x) => x.id === printShipmentId.value) || shipmentRows.value[0] || null)
 const submitChecks = computed(() => [
   { label: `订单状态需为 ${wfStore.shipReadyStatusesLabel}`, ok: !!selectedOrder.value && wfStore.isShippableStatusCode(selectedOrder.value.status) },
+  { label: '订单含明细（按明细拆分出货）', ok: !!(selectedOrder.value?.lines?.length) },
   { label: '厂长已同意出货', ok: shipReleaseReady.value },
   { label: '存在待出货数量', ok: remainingQty.value > 0 },
-  { label: '本次出货台数有效', ok: Number(form.qty) > 0 && Number(form.qty) <= maxShipmentQty.value },
+  { label: '各明细本次出货合法且合计有效', ok: lineShipDraftValid.value },
   {
     label: selectedOrder.value?.allowPartialShip ? '允许分批出货' : '仅允许整单出货（本次需提交全部剩余数量）',
-    ok: !selectedOrder.value || selectedOrder.value.allowPartialShip || Number(form.qty) >= remainingQty.value,
+    ok: !selectedOrder.value || selectedOrder.value.allowPartialShip || batchLineShipQty.value === remainingQty.value,
   },
 ])
 const canSubmitByBiz = computed(() => submitChecks.value.every((x) => x.ok))
@@ -189,10 +264,40 @@ onMounted(() => {
   if (q) form.orderId = q
   else if (orders.value[1]) form.orderId = orders.value[1].id
 })
+function initLineShipDraftForOrder() {
+  const o = selectedOrder.value
+  Object.keys(lineShipDraft).forEach((k) => delete lineShipDraft[k])
+  if (!o?.id) return
+  poStore.touchLineStructure(o.id)
+  const lines = o.lines || []
+  const plan = o.pendingShipmentPlan
+  const remHeader = Math.max(0, orderTotalForShip.value - shippedQty.value)
+  for (const line of lines) {
+    const id = line.lineId
+    if (plan?.lineAllocations?.length) {
+      const hit = plan.lineAllocations.find((a) => a.lineId === id)
+      lineShipDraft[id] = hit ? hit.qty : 0
+    } else if (!o.allowPartialShip) {
+      lineShipDraft[id] = lineRemainingForShip(line)
+    } else if (lines.length === 1) {
+      lineShipDraft[id] = Math.min(lineRemainingForShip(line), remHeader)
+    } else {
+      lineShipDraft[id] = 0
+    }
+  }
+}
+
 watch(
   () => selectedOrder.value?.id,
   () => {
-    form.qty = Math.min(Math.max(1, Number(form.qty) || 1), maxShipmentQty.value)
+    const o = selectedOrder.value
+    if (o?.allowPartialShip) {
+      const header = Math.max(0, Number(o.totalQty) || 0)
+      const shipped = Math.max(0, Number(o.shippedQty) || 0)
+      const lineSum = (o.lines || []).reduce((s, l) => s + (Number(l.qty) || 0), 0)
+      shippableTotalDraft.value = Math.max(header, lineSum, shipped, 1)
+    }
+    initLineShipDraftForOrder()
     printShipmentId.value = shipmentRows.value[0]?.id || ''
   },
   { immediate: true },
@@ -211,8 +316,23 @@ function onSubmit() {
     ElMessage.warning(submitBlockReason.value || '当前订单不满足出货条件')
     return
   }
+  if (selectedOrder.value.allowPartialShip) {
+    const sync = poStore.setShippableTotalQty(form.orderId, shippableTotalDraft.value)
+    if (!sync?.ok) {
+      ElMessage.warning(sync?.message || '出货目标台数无效')
+      return
+    }
+  }
+  const o = selectedOrder.value
+  const lineAllocations = (o.lines || [])
+    .map((l) => ({
+      lineId: l.lineId,
+      qty: Math.max(0, Math.floor(Number(lineShipDraft[l.lineId]) || 0)),
+    }))
+    .filter((x) => x.qty > 0)
   const r = poStore.recordShipment(form.orderId, {
-    qty: form.qty,
+    qty: batchLineShipQty.value,
+    lineAllocations,
     date: form.date,
     manager: form.manager,
     tracking: form.tracking,
@@ -224,15 +344,29 @@ function onSubmit() {
   }
   ElMessage.success(`已提交出货 ${r.qty} 台`)
   printShipmentId.value = r.shipmentId || shipmentRows.value[0]?.id || ''
-  form.qty = Math.min(1, maxShipmentQty.value)
   form.tracking = ''
   form.note = ''
+  initLineShipDraftForOrder()
 }
 
 function onReset() {
   form.tracking = ''
   form.note = ''
-  form.qty = 1
+  initLineShipDraftForOrder()
+}
+
+function formatShipmentLineAlloc(row) {
+  const o = selectedOrder.value
+  const alloc = row?.lineAllocations
+  if (!Array.isArray(alloc) || !alloc.length) return '—'
+  const lines = o?.lines || []
+  return alloc
+    .map((a) => {
+      const line = lines.find((l) => l.lineId === a.lineId)
+      const label = line ? `${line.unit || ''}·${line.model || ''}`.trim() || a.lineId : a.lineId
+      return `${label} ${a.qty}台`
+    })
+    .join('；')
 }
 
 function escapeHtml(v) {
@@ -251,6 +385,13 @@ function onPrintShipment() {
   }
   const o = selectedOrder.value
   const s = printTargetShipment.value
+  const allocRows = (Array.isArray(s.lineAllocations) ? s.lineAllocations : [])
+    .map((a) => {
+      const line = (o.lines || []).find((l) => l.lineId === a.lineId)
+      const label = line ? `${line.unit || ''} ${line.model || ''}`.trim() : a.lineId
+      return `<tr><td>${escapeHtml(label)}</td><td>${escapeHtml(a.qty)}</td></tr>`
+    })
+    .join('')
   const lines = (o.lines || [])
     .map(
       (x, i) => `
@@ -292,6 +433,12 @@ function onPrintShipment() {
       <div>物流单号：${escapeHtml(s.tracking || '—')}</div>
       <div>备注：${escapeHtml(s.note || '—')}</div>
     </div>
+    <h3 style="font-size:14px;margin:14px 0 6px">本批明细分摊</h3>
+    <table>
+      <thead><tr><th>明细（单位·机型）</th><th>本批台数</th></tr></thead>
+      <tbody>${allocRows || '<tr><td colspan="2">未记录按明细分摊（历史数据）</td></tr>'}</tbody>
+    </table>
+    <h3 style="font-size:14px;margin:14px 0 6px">订单合同明细</h3>
     <table>
       <thead><tr><th>#</th><th>单位名称</th><th>机型</th><th>台数</th><th>备注</th></tr></thead>
       <tbody>${lines || '<tr><td colspan="5">无明细</td></tr>'}</tbody>
@@ -366,6 +513,16 @@ function onPrintShipment() {
 }
 .nf-block {
   margin-top: 8px;
+}
+.nf-ship-plan-alert {
+  margin-top: 12px;
+}
+.nf-batch-sum {
+  font-weight: 600;
+  font-size: 16px;
+}
+.nf-ship-line-table :deep(.el-input-number) {
+  width: 110px;
 }
 .nf-kpis {
   margin-top: 12px;
